@@ -10,6 +10,7 @@ body{font-family:sans-serif;background:#111;color:#eee;margin:0;padding:12px}
 button{background:#333;color:#eee;border:0;border-radius:6px;padding:8px 12px;font-size:15px}
 button.on{background:#e53}button.s.on{background:#fc3;color:#000}
 #seek{width:100%}
+.t canvas{grid-column:1/-1;width:100%;height:48px;background:#1b1b1b;border-radius:4px;touch-action:none}
 </style></head><body>
 <input type="file" id="f" multiple accept="audio/*">
 <p><button id="pp">▶︎</button> <span id="tm">0:00 / 0:00</span></p>
@@ -44,6 +45,7 @@ function tracks_el() {
   tracks.forEach(t => {
     const d = document.createElement('div'); d.className = 't';
     d.innerHTML = `<span class="n">${t.name.replace(/</g,'&lt;')}</span><button class="m">M</button><button class="s">S</button>
+      <canvas></canvas>
       <label>볼륨<input type="range" class="v" min="0" max="1.5" step="0.01" value="${t.vol}"></label>
       <label>팬 L<input type="range" class="p" min="-1" max="1" step="0.01" value="0">R</label>`;
     const m = d.querySelector('.m'), s = d.querySelector('.s');
@@ -53,7 +55,24 @@ function tracks_el() {
     d.querySelector('.p').oninput = e => { t.pan.pan.value = +e.target.value; };
     d.querySelector('.p').ondblclick = e => { e.target.value = 0; t.pan.pan.value = 0; };
     document.getElementById('tracks').append(d);
+    t.cv = d.querySelector('canvas'); t.wave = drawWave(t.buf, t.cv);
+    t.cv.onpointerdown = e => seekTo(e.offsetX / t.cv.clientWidth * dur);
   });
+}
+
+// Render the waveform once (min/max per pixel column) to an offscreen canvas; tick() just blits it.
+// ponytail: fixed at load-time width, re-select files after rotating the phone if it looks stretched.
+function drawWave(buf, cv) {
+  const w = cv.width = cv.clientWidth * devicePixelRatio, h = cv.height = cv.clientHeight * devicePixelRatio;
+  const off = document.createElement('canvas'); off.width = w; off.height = h;
+  const g = off.getContext('2d'), chs = [...Array(buf.numberOfChannels)].map((_, i) => buf.getChannelData(i));
+  const step = Math.ceil(buf.length / w); g.fillStyle = '#4af';
+  for (let x = 0; x < w; x++) {
+    let lo = 0, hi = 0;
+    for (const d of chs) for (let i = x * step, e = Math.min(i + step, d.length); i < e; i++) { const v = d[i]; if (v < lo) lo = v; else if (v > hi) hi = v; }
+    g.fillRect(x, (1 - hi) * h / 2, 1, Math.max(1, (hi - lo) * h / 2));
+  }
+  return off;
 }
 
 function play() {
@@ -71,7 +90,17 @@ function stop() {
   playing = false; pp.textContent = '▶︎';
 }
 pp.onclick = () => playing ? stop() : play();
-seek.oninput = () => { const was = playing; stop(); offset = +seek.value; if (was) play(); };
-function tick() { seek.value = pos(); tm.textContent = `${fmt(pos())} / ${fmt(dur)}`; requestAnimationFrame(tick); }
+function seekTo(t) { const was = playing; stop(); offset = Math.max(0, Math.min(t, dur)); if (was) play(); }
+seek.oninput = () => seekTo(+seek.value);
+function tick() {
+  seek.value = pos(); tm.textContent = `${fmt(pos())} / ${fmt(dur)}`;
+  for (const t of tracks) {
+    const g = t.cv.getContext('2d'), w = t.cv.width, x = dur ? pos() / dur * w : 0;
+    g.clearRect(0, 0, w, t.cv.height);
+    g.globalAlpha = t.gain.gain.value > 0 ? 1 : 0.3; g.drawImage(t.wave, 0, 0); g.globalAlpha = 1;
+    g.fillStyle = '#e53'; g.fillRect(x, 0, 2 * devicePixelRatio, t.cv.height);
+  }
+  requestAnimationFrame(tick);
+}
 tick();
 </script></body></html>
