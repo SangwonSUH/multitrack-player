@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Multitrack</title>
+<style>
+body{font-family:sans-serif;background:#111;color:#eee;margin:0;padding:12px}
+.t{display:grid;grid-template-columns:1fr auto auto;gap:6px;align-items:center;padding:8px 0;border-bottom:1px solid #333}
+.t .n{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.t label{grid-column:1/-1;display:flex;gap:8px;align-items:center;font-size:12px}
+.t input[type=range]{flex:1}
+button{background:#333;color:#eee;border:0;border-radius:6px;padding:8px 12px;font-size:15px}
+button.on{background:#e53}button.s.on{background:#fc3;color:#000}
+#seek{width:100%}
+</style></head><body>
+<input type="file" id="f" multiple accept="audio/*">
+<p><button id="pp">▶︎</button> <span id="tm">0:00 / 0:00</span></p>
+<input type="range" id="seek" min="0" step="0.1" value="0">
+<div id="tracks"></div>
+<script>
+const ctx = new AudioContext(), tracks = [];
+let srcs = [], startAt = 0, offset = 0, playing = false, dur = 0;
+const fmt = s => `${Math.floor(s/60)}:${String(Math.floor(s%60)).padStart(2,'0')}`;
+const pos = () => playing ? Math.min(ctx.currentTime - startAt, dur) : offset;
+
+// Mute/solo: a track sounds if not muted and (no solo active or it is soloed).
+function applyMix() {
+  const anySolo = tracks.some(t => t.solo);
+  for (const t of tracks) t.gain.gain.value = (!t.mute && (!anySolo || t.solo)) ? t.vol : 0;
+}
+
+f.onchange = async () => {
+  stop(); tracks.length = 0; tracks_el();
+  for (const file of [...f.files].sort((a,b) => a.name.localeCompare(b.name))) {
+    const buf = await ctx.decodeAudioData(await file.arrayBuffer());
+    const gain = ctx.createGain(), pan = ctx.createStereoPanner();
+    gain.connect(pan).connect(ctx.destination);
+    tracks.push({name: file.name, buf, gain, pan, vol: 1, mute: false, solo: false});
+  }
+  dur = Math.max(0, ...tracks.map(t => t.buf.duration));
+  seek.max = dur; offset = 0; tracks_el(); applyMix();
+};
+
+function tracks_el() {
+  document.getElementById('tracks').innerHTML = '';
+  tracks.forEach(t => {
+    const d = document.createElement('div'); d.className = 't';
+    d.innerHTML = `<span class="n">${t.name.replace(/</g,'&lt;')}</span><button class="m">M</button><button class="s">S</button>
+      <label>볼륨<input type="range" class="v" min="0" max="1.5" step="0.01" value="${t.vol}"></label>
+      <label>팬 L<input type="range" class="p" min="-1" max="1" step="0.01" value="0">R</label>`;
+    const m = d.querySelector('.m'), s = d.querySelector('.s');
+    m.onclick = () => { t.mute = !t.mute; m.classList.toggle('on', t.mute); applyMix(); };
+    s.onclick = () => { t.solo = !t.solo; s.classList.toggle('on', t.solo); applyMix(); };
+    d.querySelector('.v').oninput = e => { t.vol = +e.target.value; applyMix(); };
+    d.querySelector('.p').oninput = e => { t.pan.pan.value = +e.target.value; };
+    d.querySelector('.p').ondblclick = e => { e.target.value = 0; t.pan.pan.value = 0; };
+    document.getElementById('tracks').append(d);
+  });
+}
+
+function play() {
+  if (!tracks.length) return;
+  ctx.resume();
+  if (offset >= dur) offset = 0;
+  const when = ctx.currentTime + 0.05;  // common start time keeps all tracks sample-aligned
+  srcs = tracks.map(t => { const s = ctx.createBufferSource(); s.buffer = t.buf; s.connect(t.gain); s.start(when, offset); return s; });
+  srcs[0].onended = () => { if (playing && pos() >= dur - 0.1) { stop(); offset = 0; } };
+  startAt = when - offset; playing = true; pp.textContent = '⏸';
+}
+function stop() {
+  if (playing) offset = pos();
+  srcs.forEach(s => { s.onended = null; s.stop(); }); srcs = [];
+  playing = false; pp.textContent = '▶︎';
+}
+pp.onclick = () => playing ? stop() : play();
+seek.oninput = () => { const was = playing; stop(); offset = +seek.value; if (was) play(); };
+function tick() { seek.value = pos(); tm.textContent = `${fmt(pos())} / ${fmt(dur)}`; requestAnimationFrame(tick); }
+tick();
+</script></body></html>
